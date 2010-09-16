@@ -3,6 +3,7 @@ import cloudfiles
 from django.core.management.base import CommandError
 from django_cloudfiles import is_ignored_path, URL_SEPERATOR
 from django_cloudfiles.management.utils.string import write
+from django_cloudfiles.management.utils.progress_bar import ProgressBar
 from .cloudfile import CloudFile
 
 def check_public(container, make_public=False):
@@ -103,3 +104,54 @@ def upload_tree(container, tree_root, force=False, drop_remote_prefix=None,
                 bytes += stats[1]
 
     return count, bytes
+
+def download(container, root, force=False, prefix='', verbosity=1):
+    """
+    Pull all files from container into the root directory.
+    
+    """
+    count = 0
+    bytes = 0
+    
+    # clean up given path
+    root = os.path.abspath(root)
+    root = os.path.normpath(root)
+    
+    # make sure tree root exists and is a directory
+    if not (os.path.exists(root) and
+            os.path.isdir(root)):
+        raise CommandError("Not a valid directory: " + root)
+        
+    for o in container.get_objects(prefix=prefix):         
+        filename = os.path.join(root, o.name)
+        exists = os.path.exists(filename)
+        local_size = os.path.getsize(filename) if exists else 0
+        path = os.path.dirname(filename)
+        
+        if not os.path.exists(path):
+            os.makedirs(path, 0755)
+            
+        if verbosity > 0:    
+            print "  %s:" % o.name
+            progress_bar = ProgressBar(total_ticks=73)
+            progress_bar.start()
+            callback = progress_bar.tick
+        else:
+            callback = None
+        
+        if (not exists or force) or (local_size != o.size):
+            try:
+                o.save_to_filename(filename, callback=callback)
+                count += 1
+                bytes += os.path.getsize(filename)
+            except IOError, (errno, string):
+                print ""
+                raise CommandError("Problem downloading file '" + filename +
+                                   "': " + string + " (IOError " + str(errno) + ")")
+            except cloudfiles.errors.InvalidObjectSize:
+                print ""
+                raise CommandError("Invalid size for file: " + filename)
+        if verbosity > 0:
+            progress_bar.end()
+
+    return (count, bytes)
